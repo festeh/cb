@@ -238,7 +238,7 @@ func handleImages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var images []string
+	images := []string{}
 	for _, entry := range entries {
 		if !entry.IsDir() && strings.HasSuffix(strings.ToLower(entry.Name()), ".png") {
 			images = append(images, entry.Name())
