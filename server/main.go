@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -75,6 +76,7 @@ func main() {
 	port := flag.Int("port", 8080, "port to listen on")
 	dir := flag.String("dir", "", "directory to save images (default ~/Pictures/cb)")
 	frontend := flag.String("frontend", "", "frontend directory (default ./frontend)")
+	lan := flag.Bool("lan", false, "listen on all interfaces and show LAN IP")
 	flag.Parse()
 
 	log.SetFlags(log.Ldate | log.Ltime | log.Lmicroseconds)
@@ -136,11 +138,32 @@ func main() {
 	http.HandleFunc("/scroll", handleScroll)
 	http.HandleFunc("/", handleFrontend)
 
-	addr := fmt.Sprintf(":%d", *port)
+	var addr string
+	if *lan {
+		addr = fmt.Sprintf("0.0.0.0:%d", *port)
+		if ip := getLocalIP(); ip != "" {
+			log.Printf("LAN address: http://%s:%d", ip, *port)
+		}
+	} else {
+		addr = fmt.Sprintf(":%d", *port)
+	}
 	log.Printf("Listening on %s", addr)
 	if err := http.ListenAndServe(addr, nil); err != nil {
 		log.Fatalf("Server failed: %v", err)
 	}
+}
+
+func getLocalIP() string {
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		return ""
+	}
+	for _, addr := range addrs {
+		if ipnet, ok := addr.(*net.IPNet); ok && !ipnet.IP.IsLoopback() && ipnet.IP.To4() != nil {
+			return ipnet.IP.String()
+		}
+	}
+	return ""
 }
 
 func handleFrontend(w http.ResponseWriter, r *http.Request) {
