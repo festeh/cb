@@ -37,6 +37,9 @@ SERVER="http://localhost:8082"
 # Save state
 echo "{\"tab\": $TAB, \"position\": \"$POS\"}" > "$STATE_FILE"
 
+# Notify server of tab change
+curl -s -X POST "$SERVER/tab" -H "Content-Type: application/json" -d "{\"tab\": $TAB}" > /dev/null
+
 # Check if flow has content, trigger if empty
 HAS_CONTENT=$(curl -s "$SERVER/flow/has-content" | grep -o '"has_content":true')
 
@@ -58,4 +61,4 @@ fi
 
 # Launch screen
 pkill -f "cb/screen/screen"
-exec /home/dima/projects/cb/screen/screen -server "$SERVER" -tab "$TAB"
+# exec /home/dima/projects/cb/screen/screen -server "$SERVER" -tab "$TAB"

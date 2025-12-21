@@ -358,6 +358,7 @@ function connectSSE() {
   }
 
   eventSource.addEventListener('connected', () => {
+    console.log('SSE connected')
     connected.value = true
   })
 
@@ -379,6 +380,28 @@ function connectSSE() {
     clearResponse()
   })
 
+  eventSource.addEventListener('scroll', (e) => {
+    console.log('SSE scroll event:', e.data)
+    const container = document.querySelector('.response-content')
+    if (container) {
+      const step = 200
+      container.scrollTop += e.data === 'up' ? -step : step
+      console.log('Scrolled container to:', container.scrollTop)
+    } else {
+      console.log('No .response-content container found')
+    }
+  })
+
+  eventSource.addEventListener('tabchange', (e) => {
+    console.log('SSE tabchange event:', e.data)
+    const tabIdx = parseInt(e.data)
+    const flow = selectedFlow.value
+    if (flow && flow.models && tabIdx >= 0 && tabIdx < flow.models.length) {
+      selectedModelTab.value = flow.models[tabIdx]
+      console.log('Switched to tab:', flow.models[tabIdx])
+    }
+  })
+
   eventSource.addEventListener('flowupdate', (e) => {
     try {
       const state = JSON.parse(e.data)
@@ -398,7 +421,8 @@ function connectSSE() {
       if (!flowLoading.value && state.running) {
         showResponse.value = true
         totalSteps.value = Object.keys(state.responses[Object.keys(state.responses)[0]] || {}).length || 1
-        if (state.models && state.models.length > 0) {
+        // Set initial tab only if not already set
+        if (!selectedModelTab.value && state.models && state.models.length > 0) {
           selectedModelTab.value = state.models[0]
         }
       }

@@ -40,6 +40,10 @@ var (
 	// Current image selection (single source of truth)
 	currentImage   string
 	currentImageMu sync.RWMutex
+
+	// Current tab selection
+	currentTab   int
+	currentTabMu sync.RWMutex
 )
 
 type FlowState struct {
@@ -125,8 +129,11 @@ func main() {
 	http.HandleFunc("/flow", handleFlow)
 	http.HandleFunc("/flow/state", handleFlowState)
 	http.HandleFunc("/flow/trigger", handleFlowTrigger)
+	http.HandleFunc("/flow/clear", handleFlowClear)
 	http.HandleFunc("/flow/has-content", handleFlowHasContent)
 	http.HandleFunc("/current-image", handleCurrentImage)
+	http.HandleFunc("/tab", handleTab)
+	http.HandleFunc("/scroll", handleScroll)
 	http.HandleFunc("/", handleFrontend)
 
 	addr := fmt.Sprintf(":%d", *port)
@@ -302,13 +309,29 @@ func broadcastSSE(filename string) {
 func broadcastFlowUpdate() {
 	flowStateMu.RLock()
 	state := flowState
-	flowStateMu.RUnlock()
-
 	if state == nil {
+		flowStateMu.RUnlock()
 		return
 	}
 
-	data, err := json.Marshal(state)
+	// Deep copy to avoid concurrent map access during JSON marshal
+	stateCopy := &FlowState{
+		FlowID:    state.FlowID,
+		Running:   state.Running,
+		Step:      state.Step,
+		Models:    make([]string, len(state.Models)),
+		Responses: make(map[string]map[int]string),
+	}
+	copy(stateCopy.Models, state.Models)
+	for model, steps := range state.Responses {
+		stateCopy.Responses[model] = make(map[int]string)
+		for step, text := range steps {
+			stateCopy.Responses[model][step] = text
+		}
+	}
+	flowStateMu.RUnlock()
+
+	data, err := json.Marshal(stateCopy)
 	if err != nil {
 		return
 	}
@@ -319,11 +342,12 @@ func broadcastSSEEvent(msg SSEMessage) {
 	sseClientsMu.Lock()
 	defer sseClientsMu.Unlock()
 
+	log.Printf("SSE broadcast: event=%s clients=%d", msg.Event, len(sseClients))
 	for clientChan := range sseClients {
 		select {
 		case clientChan <- msg.Event + "|" + msg.Data:
 		default:
-			// Client buffer full, skip
+			log.Printf("SSE client buffer full, skipping")
 		}
 	}
 }
@@ -447,6 +471,68 @@ func handleCurrentImage(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 	}
+}
+
+func handleTab(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		currentTabMu.RLock()
+		tab := currentTab
+		currentTabMu.RUnlock()
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]int{"tab": tab})
+
+	case http.MethodPost:
+		var req struct {
+			Tab int `json:"tab"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "Invalid JSON", http.StatusBadRequest)
+			return
+		}
+		currentTabMu.Lock()
+		currentTab = req.Tab
+		currentTabMu.Unlock()
+		log.Printf("Tab changed: %d", req.Tab)
+
+		// Broadcast tab change
+		broadcastSSEEvent(SSEMessage{Event: "tabchange", Data: strconv.Itoa(req.Tab)})
+		w.WriteHeader(http.StatusOK)
+
+	default:
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func handleScroll(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	dir := r.URL.Query().Get("dir")
+	if dir != "up" && dir != "down" {
+		http.Error(w, "Invalid direction: %s", http.StatusBadRequest)
+		return
+	}
+
+	log.Printf("Scroll: %s (clients: %d)", dir, len(sseClients))
+	broadcastSSEEvent(SSEMessage{Event: "scroll", Data: dir})
+	w.WriteHeader(http.StatusOK)
+}
+
+func handleFlowClear(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	flowStateMu.Lock()
+	flowState = nil
+	flowStateMu.Unlock()
+
+	log.Printf("Flow state cleared")
+	w.WriteHeader(http.StatusOK)
 }
 
 func handleFlowHasContent(w http.ResponseWriter, r *http.Request) {
