@@ -1,0 +1,18 @@
+# Binaries
+client/client
+server/server
+screen/screen
+
+# Node
+node_modules/
+frontend/dist/
+
+.config/
+
+# OS
+.DS_Store
+
+# IDE
+.idea/
+.vscode/
+*.swp
