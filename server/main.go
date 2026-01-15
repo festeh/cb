@@ -332,7 +332,6 @@ func broadcastSSEEvent(msg SSEMessage) {
 	sseClientsMu.Lock()
 	defer sseClientsMu.Unlock()
 
-	log.Printf("SSE broadcast: event=%s clients=%d", msg.Event, len(sseClients))
 	for clientChan := range sseClients {
 		select {
 		case clientChan <- msg.Event + "|" + msg.Data:
@@ -908,6 +907,7 @@ func runModelStep(ctx context.Context, apiKey, model string, stepIdx int, prompt
 
 	resp, err := client.Do(httpReq)
 	if err != nil {
+		log.Printf("AI error [%s]: %v", model, err)
 		chunks <- StreamChunk{Model: model, Step: stepIdx, Error: err.Error()}
 		return
 	}
@@ -915,6 +915,7 @@ func runModelStep(ctx context.Context, apiKey, model string, stepIdx int, prompt
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
+		log.Printf("AI error [%s]: status %d: %s", model, resp.StatusCode, body)
 		chunks <- StreamChunk{Model: model, Step: stepIdx, Error: string(body)}
 		return
 	}
