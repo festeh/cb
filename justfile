@@ -17,9 +17,9 @@ build-frontend:
 build-server:
     cd server && go build -o server main.go
 
-# Build screen binary
+# Build screen binary (uses ~/.cache/go-build)
 build-screen:
-    cd screen && go build -o screen .
+    cd screen && go build -v -o screen .
 
 # Build all binaries
 build: build-server build-screen build-frontend

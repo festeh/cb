@@ -169,6 +169,8 @@ func main() {
 		label := gtk.NewLabel("Connecting...")
 		label.SetLineWrap(true)
 		label.SetMaxWidthChars(80)
+		label.SetVAlign(gtk.AlignStart)
+		label.SetHAlign(gtk.AlignFill)
 
 		// Create a scrolled window
 		scroll := gtk.NewScrolledWindow(nil, nil)
@@ -205,10 +207,13 @@ func main() {
 		// Apply CSS
 		css := gtk.NewCSSProvider()
 		css.LoadFromData(`
-			window {
-				background-color: rgba(0, 0, 0, 0.85);
+			window, scrolledwindow, viewport, box {
+				background-color: transparent;
 			}
 			label {
+				background-color: rgba(0, 0, 0, 0.75);
+				border-radius: 8px;
+				padding: 12px;
 				color: white;
 				font-size: 14px;
 				font-family: monospace;
