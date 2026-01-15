@@ -3,6 +3,9 @@ client/client
 server/server
 screen/screen
 
+# WIP
+vm/
+
 # Node
 node_modules/
 frontend/dist/
