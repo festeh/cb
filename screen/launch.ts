@@ -18,6 +18,7 @@ function log(message: string): void {
 interface State {
   tab: number;
   position: string;
+  server: string;
 }
 
 function loadState(): State {
@@ -29,11 +30,12 @@ function loadState(): State {
       return {
         tab: state.tab ?? 0,
         position: state.position ?? "right",
+        server: state.server ?? "http://localhost:8080",
       };
     } catch {}
   }
 
-  return { tab: 0, position: "right" };
+  return { tab: 0, position: "right", server: "http://localhost:8080" };
 }
 
 function saveState(state: State): void {
@@ -45,6 +47,7 @@ function parseArgs(savedState: State) {
     "--tab": Number,
     "--pos": String,
     "--server": String,
+    "--scroll": String,
     "-t": "--tab",
     "-p": "--pos",
     "-s": "--server",
@@ -53,7 +56,8 @@ function parseArgs(savedState: State) {
   return {
     tab: args["--tab"] ?? savedState.tab,
     pos: args["--pos"] ?? savedState.position,
-    server: args["--server"] ?? "http://localhost:8082",
+    server: args["--server"] ?? savedState.server,
+    scroll: args["--scroll"] as "up" | "down" | undefined,
   };
 }
 
@@ -69,6 +73,19 @@ function isScreenRunning(): boolean {
 function killScreen(): void {
   try {
     execSync("pkill -f 'cb/screen/screen'", { stdio: "pipe" });
+  } catch {}
+}
+
+async function scrollBoth(server: string, dir: "up" | "down"): Promise<void> {
+  // Send signal to screen overlay (SIGUSR1=up, SIGUSR2=down)
+  const signal = dir === "up" ? "SIGUSR1" : "SIGUSR2";
+  try {
+    execSync(`pkill -${signal} -f 'cb/screen/screen'`, { stdio: "pipe" });
+  } catch {}
+
+  // Send HTTP request to server for frontend SSE
+  try {
+    await fetch(`${server}/scroll?dir=${dir}`, { method: "POST" });
   } catch {}
 }
 
@@ -114,8 +131,16 @@ function launchScreen(server: string, tab: number): void {
 async function main() {
   log("Starting launch script");
   const savedState = loadState();
-  const { tab, pos, server } = parseArgs(savedState);
-  log(`Args: tab=${tab} pos=${pos} server=${server}`);
+  const { tab, pos, server, scroll } = parseArgs(savedState);
+  log(`Args: tab=${tab} pos=${pos} server=${server} scroll=${scroll}`);
+
+  // Handle scroll command
+  if (scroll) {
+    log(`Scrolling ${scroll}`);
+    await scrollBoth(server, scroll);
+    process.exit(0);
+  }
+
   log(`Saved state: tab=${savedState.tab} pos=${savedState.position}`);
 
   // Toggle: if running with same params, kill and exit
@@ -125,7 +150,7 @@ async function main() {
     process.exit(0);
   }
 
-  saveState({ tab, position: pos });
+  saveState({ tab, position: pos, server });
   log("Notifying tab change");
   await notifyTabChange(server, tab);
   log("Ensuring flow content");
