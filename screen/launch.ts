@@ -1,10 +1,19 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
+#!/usr/bin/env bun
+import { existsSync, mkdirSync, readFileSync, writeFileSync, appendFileSync } from "fs";
 import { dirname } from "path";
 import { execSync, spawn } from "child_process";
 import arg from "arg";
 
 const STATE_FILE = `${process.env.HOME}/.config/cb/screen-state.json`;
 const SCREEN_BIN = "/home/dima/projects/cb/screen/screen";
+const LOG_FILE = "/tmp/cb-screen.log";
+
+function log(message: string): void {
+  const now = new Date();
+  const pad = (n: number, len = 2) => String(n).padStart(len, "0");
+  const timestamp = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}.${pad(now.getMilliseconds(), 3)}`;
+  appendFileSync(LOG_FILE, `${timestamp} ${message}\n`);
+}
 
 interface State {
   tab: number;
@@ -103,19 +112,26 @@ function launchScreen(server: string, tab: number): void {
 }
 
 async function main() {
+  log("Starting launch script");
   const savedState = loadState();
   const { tab, pos, server } = parseArgs(savedState);
+  log(`Args: tab=${tab} pos=${pos} server=${server}`);
+  log(`Saved state: tab=${savedState.tab} pos=${savedState.position}`);
 
   // Toggle: if running with same params, kill and exit
   if (isScreenRunning() && tab === savedState.tab && pos === savedState.position) {
+    log("Screen running with same params, killing and exiting");
     killScreen();
     process.exit(0);
   }
 
   saveState({ tab, position: pos });
+  log("Notifying tab change");
   await notifyTabChange(server, tab);
+  log("Ensuring flow content");
   await ensureFlowContent(server);
 
+  log("Launching screen");
   killScreen();
   launchScreen(server, tab);
 }

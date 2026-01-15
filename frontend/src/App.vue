@@ -147,9 +147,11 @@ async function reportCurrentImage() {
 }
 
 async function loadSettings() {
+  console.log('Loading settings...')
   try {
     const resp = await fetch('/api/settings')
     const data = await resp.json()
+    console.log('Loaded settings:', data)
     settings.value = {
       openrouter_api_key: data.openrouter_api_key || '',
       flows: data.flows || [],
@@ -162,15 +164,24 @@ async function loadSettings() {
 }
 
 async function saveSettings() {
+  console.log('Saving settings:', settings.value)
   try {
-    await fetch('/api/settings', {
+    const resp = await fetch('/api/settings', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(settings.value)
     })
-    showSettings.value = false
+    console.log('Save settings response:', resp.status, resp.statusText)
+    if (resp.ok) {
+      showSettings.value = false
+    } else {
+      const text = await resp.text()
+      console.error('Failed to save settings:', text)
+      errorMessage.value = text
+    }
   } catch (err) {
     console.error('Failed to save settings:', err)
+    errorMessage.value = err.message
   }
 }
 

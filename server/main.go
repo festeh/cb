@@ -22,9 +22,8 @@ import (
 )
 
 var (
-	imageDir    string
-	frontendDir string
-	configDir   string
+	imageDir  string
+	configDir string
 
 	// SSE clients
 	sseClients   = make(map[chan string]bool)
@@ -75,31 +74,22 @@ type Settings struct {
 func main() {
 	port := flag.Int("port", 8080, "port to listen on")
 	dir := flag.String("dir", "", "directory to save images (default ~/Pictures/cb)")
-	frontend := flag.String("frontend", "", "frontend directory (default ./frontend)")
 	lan := flag.Bool("lan", false, "listen on all interfaces and show LAN IP")
 	flag.Parse()
 
 	log.SetFlags(log.Ldate | log.Ltime | log.Lmicroseconds)
 	log.Println("Starting image server")
 
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		log.Fatalf("Failed to get home directory: %v", err)
+	}
+
 	if *dir != "" {
 		imageDir = *dir
 	} else {
-		homeDir, err := os.UserHomeDir()
-		if err != nil {
-			log.Fatalf("Failed to get home directory: %v", err)
-		}
 		imageDir = filepath.Join(homeDir, "Pictures", "cb")
 	}
-
-	if *frontend != "" {
-		frontendDir = *frontend
-	} else {
-		frontendDir = "frontend/dist"
-	}
-
-	// Set config directory
-	homeDir, _ := os.UserHomeDir()
 	configDir = filepath.Join(homeDir, ".config", "cb")
 
 	if err := os.MkdirAll(imageDir, 0755); err != nil {
@@ -109,18 +99,14 @@ func main() {
 		log.Fatalf("Failed to create config directory: %v", err)
 	}
 
-	// Load settings from file
-	var err error
 	settings, err = loadSettingsFromFile()
 	if err != nil {
 		log.Fatalf("Failed to load settings: %v", err)
 	}
 
-	// Initialize current image to most recent
 	currentImage = getMostRecentImage()
 	log.Printf("Image directory: %s", imageDir)
 	log.Printf("Config directory: %s", configDir)
-	log.Printf("Frontend directory: %s", frontendDir)
 	log.Printf("Current image: %s", currentImage)
 
 	http.HandleFunc("/upload", handleUpload)
@@ -136,7 +122,6 @@ func main() {
 	http.HandleFunc("/current-image", handleCurrentImage)
 	http.HandleFunc("/tab", handleTab)
 	http.HandleFunc("/scroll", handleScroll)
-	http.HandleFunc("/", handleFrontend)
 
 	var addr string
 	if *lan {
@@ -164,24 +149,6 @@ func getLocalIP() string {
 		}
 	}
 	return ""
-}
-
-func handleFrontend(w http.ResponseWriter, r *http.Request) {
-	path := r.URL.Path
-	if path == "/" {
-		path = "/index.html"
-	}
-
-	fullPath := filepath.Join(frontendDir, path)
-
-	// Check if file exists
-	if _, err := os.Stat(fullPath); os.IsNotExist(err) {
-		// SPA fallback: serve index.html for non-existent paths
-		http.ServeFile(w, r, filepath.Join(frontendDir, "index.html"))
-		return
-	}
-
-	http.ServeFile(w, r, fullPath)
 }
 
 func handleUpload(w http.ResponseWriter, r *http.Request) {
@@ -449,23 +416,27 @@ func saveSettings(s *Settings) error {
 }
 
 func handleSettings(w http.ResponseWriter, r *http.Request) {
+	log.Printf("Settings request: %s", r.Method)
 	switch r.Method {
 	case http.MethodGet:
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(getSettings())
+		log.Printf("Settings GET: returned %d flows", len(getSettings().Flows))
 
 	case http.MethodPost:
 		var s Settings
 		if err := json.NewDecoder(r.Body).Decode(&s); err != nil {
+			log.Printf("Settings POST: invalid JSON: %v", err)
 			http.Error(w, "Invalid JSON", http.StatusBadRequest)
 			return
 		}
+		log.Printf("Settings POST: received %d flows, default=%s", len(s.Flows), s.DefaultFlowID)
 		if err := saveSettings(&s); err != nil {
 			log.Printf("ERROR: Failed to save settings: %v", err)
 			http.Error(w, "Failed to save settings", http.StatusInternalServerError)
 			return
 		}
-		log.Printf("Settings saved")
+		log.Printf("Settings saved successfully")
 		w.WriteHeader(http.StatusOK)
 
 	default:
