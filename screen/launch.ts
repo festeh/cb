@@ -99,20 +99,13 @@ async function notifyTabChange(server: string, tab: number): Promise<void> {
   } catch {}
 }
 
-async function ensureFlowContent(server: string): Promise<void> {
+async function triggerFlowIfNeeded(server: string): Promise<void> {
   try {
     const res = await fetch(`${server}/flow/has-content`);
     const data = await res.json();
 
     if (!data.has_content) {
       fetch(`${server}/flow/trigger`, { method: "POST" }).catch(() => {});
-
-      for (let attempts = 0; attempts < 20; attempts++) {
-        await new Promise((resolve) => setTimeout(resolve, 5000));
-        const checkRes = await fetch(`${server}/flow/has-content`);
-        const checkData = await checkRes.json();
-        if (checkData.has_content) break;
-      }
     }
   } catch {}
 }
@@ -153,8 +146,8 @@ async function main() {
   saveState({ tab, position: pos, server });
   log("Notifying tab change");
   await notifyTabChange(server, tab);
-  log("Ensuring flow content");
-  await ensureFlowContent(server);
+  log("Triggering flow if needed");
+  await triggerFlowIfNeeded(server);
 
   log("Launching screen");
   killScreen();

@@ -3,55 +3,56 @@ package main
 import (
 	"bytes"
 	"encoding/json"
-	"flag"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
 	"os/exec"
 	"time"
+
+	"github.com/spf13/cobra"
 )
 
 var (
-	serverURL   string
-	monitorName string
+	captureInterval int
+	captureMonitor  string
+	captureOneshot  bool
 )
 
-func main() {
-	server := flag.String("server", "localhost:8080", "server address (host:port)")
-	interval := flag.Int("interval", 10, "screenshot interval in seconds")
-	monitor := flag.String("monitor", "", "monitor/output name (e.g., DP-1, HDMI-A-1)")
-	oneshot := flag.Bool("oneshot", false, "take single screenshot and exit")
-	flag.Parse()
+var captureCmd = &cobra.Command{
+	Use:   "capture",
+	Short: "Capture screenshots and send to server",
+	Run:   runCapture,
+}
 
-	serverURL = fmt.Sprintf("http://%s/upload", *server)
-	monitorName = *monitor
+func init() {
+	captureCmd.Flags().IntVarP(&captureInterval, "interval", "i", 10, "Screenshot interval in seconds")
+	captureCmd.Flags().StringVarP(&captureMonitor, "monitor", "m", "", "Monitor/output name (e.g., DP-1, HDMI-A-1)")
+	captureCmd.Flags().BoolVarP(&captureOneshot, "oneshot", "o", false, "Take single screenshot and exit")
+}
 
-	log.SetFlags(log.Ldate | log.Ltime | log.Lmicroseconds)
-
-	if monitorName != "" {
-		if err := validateMonitor(monitorName); err != nil {
+func runCapture(cmd *cobra.Command, args []string) {
+	if captureMonitor != "" {
+		if err := validateMonitor(captureMonitor); err != nil {
 			log.Fatalf("Invalid monitor: %v", err)
 		}
 	}
 
-	// One-shot mode: take screenshot and exit
-	if *oneshot {
+	if captureOneshot {
 		takeAndSendScreenshot()
 		return
 	}
 
-	log.Println("Starting screenshot client")
+	log.Println("Starting screenshot capture")
 	log.Printf("Server URL: %s", serverURL)
-	log.Printf("Interval: %d seconds", *interval)
-	if monitorName != "" {
-		log.Printf("Monitor: %s", monitorName)
+	log.Printf("Interval: %d seconds", captureInterval)
+	if captureMonitor != "" {
+		log.Printf("Monitor: %s", captureMonitor)
 	}
 
-	ticker := time.NewTicker(time.Duration(*interval) * time.Second)
+	ticker := time.NewTicker(time.Duration(captureInterval) * time.Second)
 	defer ticker.Stop()
 
-	// Take first screenshot immediately
 	takeAndSendScreenshot()
 
 	for range ticker.C {
@@ -60,7 +61,6 @@ func main() {
 }
 
 func validateMonitor(name string) error {
-	// Try hyprctl first, then swaymsg
 	monitors, err := listMonitors()
 	if err != nil {
 		return err
@@ -76,14 +76,12 @@ func validateMonitor(name string) error {
 }
 
 func listMonitors() ([]string, error) {
-	// Try hyprctl monitors
 	cmd := exec.Command("hyprctl", "monitors", "-j")
 	output, err := cmd.Output()
 	if err == nil {
 		return parseHyprctlMonitors(output)
 	}
 
-	// Try swaymsg
 	cmd = exec.Command("swaymsg", "-t", "get_outputs")
 	output, err = cmd.Output()
 	if err == nil {
@@ -125,10 +123,9 @@ func takeAndSendScreenshot() {
 	log.Printf("Taking screenshot...")
 	start := time.Now()
 
-	// Capture screenshot to stdout
 	var cmd *exec.Cmd
-	if monitorName != "" {
-		cmd = exec.Command("grim", "-o", monitorName, "-")
+	if captureMonitor != "" {
+		cmd = exec.Command("grim", "-o", captureMonitor, "-")
 	} else {
 		cmd = exec.Command("grim", "-")
 	}
@@ -141,11 +138,11 @@ func takeAndSendScreenshot() {
 	captureTime := time.Since(start)
 	log.Printf("Screenshot captured (%d bytes, took %v)", len(output), captureTime)
 
-	// Send to server
 	log.Printf("Sending to server...")
 	sendStart := time.Now()
 
-	resp, err := http.Post(serverURL, "image/png", bytes.NewReader(output))
+	uploadURL := serverURL + "/upload"
+	resp, err := http.Post(uploadURL, "image/png", bytes.NewReader(output))
 	if err != nil {
 		log.Printf("ERROR: Failed to send screenshot: %v", err)
 		return
