@@ -4,7 +4,9 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"os/exec"
+	"strings"
 
 	"github.com/spf13/cobra"
 )
@@ -23,11 +25,14 @@ func runScroll(cmd *cobra.Command, args []string) {
 	}
 
 	// Send signal to screen overlay (SIGUSR1=up, SIGUSR2=down)
-	signal := "SIGUSR1"
+	signal := "-SIGUSR1"
 	if dir == "down" {
-		signal = "SIGUSR2"
+		signal = "-SIGUSR2"
 	}
-	exec.Command("pkill", "-"+signal, "-f", "screen overlay").Run()
+	if data, err := os.ReadFile(getPidFilePath()); err == nil {
+		pid := strings.TrimSpace(string(data))
+		exec.Command("kill", signal, pid).Run()
+	}
 
 	// Send HTTP request to server for frontend SSE
 	resp, err := http.Post(fmt.Sprintf("%s/scroll?dir=%s", serverURL, dir), "", nil)

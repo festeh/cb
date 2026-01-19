@@ -24,9 +24,10 @@ import (
 )
 
 var (
-	tabIndex  int
-	position  string
-	stepIndex int
+	tabIndex    int
+	position    string
+	stepIndex   int
+	showOverlay bool
 )
 
 var overlayCmd = &cobra.Command{
@@ -39,12 +40,17 @@ func init() {
 	overlayCmd.Flags().IntVarP(&tabIndex, "tab", "t", 0, "Tab index (0-based)")
 	overlayCmd.Flags().StringVarP(&position, "pos", "p", "", "Position (left, center, right)")
 	overlayCmd.Flags().IntVar(&stepIndex, "step", -1, "Step index (0-based, -1 for all)")
+	overlayCmd.Flags().BoolVar(&showOverlay, "show-overlay", true, "Show GTK overlay (false to only send commands to frontend)")
 }
 
 type ScreenState struct {
 	Tab      int    `json:"tab"`
 	Position string `json:"position"`
 	Server   string `json:"server"`
+}
+
+func (s ScreenState) IsRunningWith(tab int, pos string) bool {
+	return isOverlayRunning() && s.Tab == tab && s.Position == pos
 }
 
 type FlowStateResponse struct {
@@ -57,6 +63,10 @@ type FlowStateResponse struct {
 func getStateFilePath() string {
 	home, _ := os.UserHomeDir()
 	return filepath.Join(home, ".config", "cb", "screen-state.json")
+}
+
+func getPidFilePath() string {
+	return "/tmp/cb-screen-overlay.pid"
 }
 
 func loadScreenState() ScreenState {
@@ -77,12 +87,28 @@ func saveScreenState(state ScreenState) {
 }
 
 func isOverlayRunning() bool {
-	err := exec.Command("pgrep", "-f", "screen overlay").Run()
+	data, err := os.ReadFile(getPidFilePath())
+	if err != nil {
+		return false
+	}
+	pid := strings.TrimSpace(string(data))
+	// Check if process exists
+	err = exec.Command("kill", "-0", pid).Run()
 	return err == nil
 }
 
 func killOverlay() {
-	exec.Command("pkill", "-f", "screen overlay").Run()
+	data, err := os.ReadFile(getPidFilePath())
+	if err != nil {
+		return
+	}
+	pid := strings.TrimSpace(string(data))
+	exec.Command("kill", pid).Run()
+	os.Remove(getPidFilePath())
+}
+
+func writePidFile() {
+	os.WriteFile(getPidFilePath(), []byte(fmt.Sprintf("%d", os.Getpid())), 0644)
 }
 
 func notifyTabChange(server string, tab int) {
@@ -232,10 +258,10 @@ func runOverlay(cmd *cobra.Command, args []string) {
 		serverURL = savedState.Server
 	}
 
-	log.Printf("Tab: %d, Position: %s, Server: %s", tabIndex, position, serverURL)
+	log.Printf("Tab: %d, Position: %s, Server: %s, ShowOverlay: %v", tabIndex, position, serverURL, showOverlay)
 
 	// Toggle: if running with same params, kill and exit
-	if isOverlayRunning() && tabIndex == savedState.Tab && position == savedState.Position {
+	if showOverlay && savedState.IsRunningWith(tabIndex, position) {
 		log.Printf("Overlay running with same params, toggling off")
 		killOverlay()
 		os.Exit(0)
@@ -250,8 +276,16 @@ func runOverlay(cmd *cobra.Command, args []string) {
 	// Trigger flow if needed
 	triggerFlowIfNeeded(serverURL)
 
+	if !showOverlay {
+		log.Printf("Commands sent to frontend, not showing overlay")
+		return
+	}
+
 	// Kill any existing overlay
 	killOverlay()
+
+	// Write PID file
+	writePidFile()
 
 	log.Printf("Starting screen overlay")
 
