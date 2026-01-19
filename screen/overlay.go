@@ -171,8 +171,8 @@ func getDisplayText(state *FlowStateResponse) string {
 	}
 
 	if stepIndex >= 0 {
-		text, ok := state.Content[fmt.Sprintf("%d", stepIndex)]
-		if !ok || text == "" {
+		text := state.Content[fmt.Sprintf("%d", stepIndex)]
+		if text == "" {
 			if state.Running {
 				return "Running..."
 			}
@@ -202,7 +202,7 @@ func getDisplayText(state *FlowStateResponse) string {
 	return strings.Join(parts, "\n\n")
 }
 
-func subscribeSSE(updateFunc func(*FlowStateResponse)) {
+func subscribeSSE(onUpdate func()) {
 	for {
 		log.Printf("Connecting to SSE...")
 		resp, err := http.Get(serverURL + "/events")
@@ -216,26 +216,10 @@ func subscribeSSE(updateFunc func(*FlowStateResponse)) {
 		scanner := bufio.NewScanner(resp.Body)
 		for scanner.Scan() {
 			line := scanner.Text()
-			if !strings.HasPrefix(line, "data: ") {
-				continue
+			if strings.HasPrefix(line, "event: flowupdate") {
+				log.Printf("Got flowupdate event, refetching...")
+				onUpdate()
 			}
-			data := strings.TrimPrefix(line, "data: ")
-			parts := strings.SplitN(data, "|", 2)
-			if len(parts) != 2 {
-				continue
-			}
-			event, payload := parts[0], parts[1]
-			if event != "flowupdate" {
-				continue
-			}
-
-			var state FlowStateResponse
-			if err := json.Unmarshal([]byte(payload), &state); err != nil {
-				log.Printf("Failed to parse flowupdate: %v", err)
-				continue
-			}
-			log.Printf("Got flow update, running=%v, content keys=%d", state.Running, len(state.Content))
-			updateFunc(&state)
 		}
 
 		resp.Body.Close()
@@ -381,18 +365,19 @@ func runOverlay(cmd *cobra.Command, args []string) {
 			SetClickThrough(win.Native())
 		})
 
-		state, err := fetchFlowState()
-		if err != nil {
-			label.SetText("Not ready")
-		} else {
-			label.SetText(getDisplayText(state))
+		updateLabel := func() {
+			state, _ := fetchFlowState()
+			text := getDisplayText(state)
+			glib.IdleAdd(func() {
+				label.SetText(text)
+			})
 		}
 
-		go subscribeSSE(func(state *FlowStateResponse) {
-			glib.IdleAdd(func() {
-				label.SetText(getDisplayText(state))
-			})
-		})
+		// Initial fetch
+		updateLabel()
+
+		// SSE for live updates - just triggers refetch
+		go subscribeSSE(updateLabel)
 
 		app.AddWindow(win)
 		win.ShowAll()

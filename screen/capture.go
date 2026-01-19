@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"os"
 	"os/exec"
 	"time"
 
@@ -17,6 +18,7 @@ var (
 	captureInterval int
 	captureMonitor  string
 	captureOneshot  bool
+	captureOverlay  bool
 )
 
 var captureCmd = &cobra.Command{
@@ -29,6 +31,7 @@ func init() {
 	captureCmd.Flags().IntVarP(&captureInterval, "interval", "i", 10, "Screenshot interval in seconds")
 	captureCmd.Flags().StringVarP(&captureMonitor, "monitor", "m", "", "Monitor/output name (e.g., DP-1, HDMI-A-1)")
 	captureCmd.Flags().BoolVarP(&captureOneshot, "oneshot", "o", false, "Take single screenshot and exit")
+	captureCmd.Flags().BoolVar(&captureOverlay, "overlay", false, "Open overlay after oneshot capture")
 }
 
 func runCapture(cmd *cobra.Command, args []string) {
@@ -40,6 +43,13 @@ func runCapture(cmd *cobra.Command, args []string) {
 
 	if captureOneshot {
 		takeAndSendScreenshot()
+		if captureOverlay {
+			// Trigger flow before opening overlay
+			http.Post(serverURL+"/flow/trigger", "", nil)
+			exe, _ := os.Executable()
+			cmd := exec.Command(exe, "overlay", "-s", serverURL)
+			cmd.Start()
+		}
 		return
 	}
 

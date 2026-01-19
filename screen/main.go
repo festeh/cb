@@ -1,6 +1,7 @@
 package main
 
 import (
+	"io"
 	"log"
 	"os"
 
@@ -10,6 +11,10 @@ import (
 var serverURL string
 
 func main() {
+	logFile, err := os.OpenFile("/tmp/cb-screen.log", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err == nil {
+		log.SetOutput(io.MultiWriter(os.Stderr, logFile))
+	}
 	log.SetFlags(log.Ldate | log.Ltime | log.Lmicroseconds)
 
 	rootCmd := &cobra.Command{

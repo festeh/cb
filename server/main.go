@@ -247,6 +247,15 @@ func handleSSE(w http.ResponseWriter, r *http.Request) {
 
 	// Send immediate connected event so browser knows connection is live
 	fmt.Fprintf(w, "event: connected\ndata: ok\n\n")
+
+	// Send current flow state on connect
+	flowStateMu.RLock()
+	if flowState != nil {
+		data, _ := json.Marshal(flowState)
+		fmt.Fprintf(w, "event: flowupdate\ndata: %s\n\n", data)
+	}
+	flowStateMu.RUnlock()
+
 	if f, ok := w.(http.Flusher); ok {
 		f.Flush()
 	}
