@@ -2,12 +2,14 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"strings"
@@ -23,6 +25,7 @@ import (
 
 var (
 	tabIndex  int
+	position  string
 	stepIndex int
 )
 
@@ -34,11 +37,14 @@ var overlayCmd = &cobra.Command{
 
 func init() {
 	overlayCmd.Flags().IntVarP(&tabIndex, "tab", "t", 0, "Tab index (0-based)")
-	overlayCmd.Flags().IntVarP(&stepIndex, "step", "", -1, "Step index (0-based, -1 for all)")
+	overlayCmd.Flags().StringVarP(&position, "pos", "p", "", "Position (left, center, right)")
+	overlayCmd.Flags().IntVar(&stepIndex, "step", -1, "Step index (0-based, -1 for all)")
 }
 
 type ScreenState struct {
+	Tab      int    `json:"tab"`
 	Position string `json:"position"`
+	Server   string `json:"server"`
 }
 
 type FlowStateResponse struct {
@@ -54,13 +60,58 @@ func getStateFilePath() string {
 }
 
 func loadScreenState() ScreenState {
-	state := ScreenState{Position: "right"}
+	state := ScreenState{Tab: 0, Position: "right", Server: "http://localhost:8080"}
 	data, err := os.ReadFile(getStateFilePath())
 	if err != nil {
 		return state
 	}
 	json.Unmarshal(data, &state)
 	return state
+}
+
+func saveScreenState(state ScreenState) {
+	dir := filepath.Dir(getStateFilePath())
+	os.MkdirAll(dir, 0755)
+	data, _ := json.Marshal(state)
+	os.WriteFile(getStateFilePath(), data, 0644)
+}
+
+func isOverlayRunning() bool {
+	err := exec.Command("pgrep", "-f", "screen overlay").Run()
+	return err == nil
+}
+
+func killOverlay() {
+	exec.Command("pkill", "-f", "screen overlay").Run()
+}
+
+func notifyTabChange(server string, tab int) {
+	body, _ := json.Marshal(map[string]int{"tab": tab})
+	resp, err := http.Post(server+"/tab", "application/json", bytes.NewReader(body))
+	if err != nil {
+		log.Printf("Failed to notify tab change: %v", err)
+		return
+	}
+	resp.Body.Close()
+}
+
+func triggerFlowIfNeeded(server string) {
+	resp, err := http.Get(server + "/flow/has-content")
+	if err != nil {
+		return
+	}
+	defer resp.Body.Close()
+
+	var data struct {
+		HasContent bool `json:"has_content"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
+		return
+	}
+
+	if !data.HasContent {
+		http.Post(server+"/flow/trigger", "", nil)
+	}
 }
 
 func fetchFlowState() (*FlowStateResponse, error) {
@@ -168,10 +219,41 @@ func subscribeSSE(updateFunc func(*FlowStateResponse)) {
 }
 
 func runOverlay(cmd *cobra.Command, args []string) {
+	savedState := loadScreenState()
+
+	// Apply defaults from saved state if flags not provided
+	if !cmd.Flags().Changed("tab") {
+		tabIndex = savedState.Tab
+	}
+	if !cmd.Flags().Changed("pos") {
+		position = savedState.Position
+	}
+	if !cmd.Flags().Changed("server") {
+		serverURL = savedState.Server
+	}
+
+	log.Printf("Tab: %d, Position: %s, Server: %s", tabIndex, position, serverURL)
+
+	// Toggle: if running with same params, kill and exit
+	if isOverlayRunning() && tabIndex == savedState.Tab && position == savedState.Position {
+		log.Printf("Overlay running with same params, toggling off")
+		killOverlay()
+		os.Exit(0)
+	}
+
+	// Save new state
+	saveScreenState(ScreenState{Tab: tabIndex, Position: position, Server: serverURL})
+
+	// Notify server of tab change
+	notifyTabChange(serverURL, tabIndex)
+
+	// Trigger flow if needed
+	triggerFlowIfNeeded(serverURL)
+
+	// Kill any existing overlay
+	killOverlay()
+
 	log.Printf("Starting screen overlay")
-	log.Printf("Server: %s", serverURL)
-	log.Printf("Tab: %d", tabIndex)
-	log.Printf("Step: %d", stepIndex)
 
 	app := gtk.NewApplication("com.github.festeh.cb.screen", 0)
 
@@ -192,9 +274,8 @@ func runOverlay(cmd *cobra.Command, args []string) {
 		gtklayershell.SetMargin(win, gtklayershell.LayerShellEdgeTop, 20)
 		gtklayershell.SetMargin(win, gtklayershell.LayerShellEdgeBottom, 20)
 
-		screenState := loadScreenState()
-		log.Printf("Position: %s", screenState.Position)
-		switch screenState.Position {
+		log.Printf("Position: %s", position)
+		switch position {
 		case "left":
 			gtklayershell.SetMargin(win, gtklayershell.LayerShellEdgeLeft, 20)
 			gtklayershell.SetMargin(win, gtklayershell.LayerShellEdgeRight, 800)
