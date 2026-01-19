@@ -22,6 +22,7 @@ func main() {
 	rootCmd.AddCommand(overlayCmd)
 	rootCmd.AddCommand(captureCmd)
 	rootCmd.AddCommand(scrollCmd)
+	rootCmd.AddCommand(cleanCmd)
 
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)
