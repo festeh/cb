@@ -33,10 +33,6 @@ var (
 	settings   *Settings
 	settingsMu sync.RWMutex
 
-	// Current flow execution state
-	flowState   *FlowState
-	flowStateMu sync.RWMutex
-
 	// Current image selection (single source of truth)
 	currentImage   string
 	currentImageMu sync.RWMutex
@@ -186,9 +182,7 @@ func handleUpload(w http.ResponseWriter, r *http.Request) {
 	setCurrentImage(filename)
 
 	// Clear flow state so next F1 triggers new flow
-	flowStateMu.Lock()
-	flowState = nil
-	flowStateMu.Unlock()
+	flowManager.Clear()
 
 	// Notify SSE clients
 	broadcastSSE(filename)
@@ -249,12 +243,10 @@ func handleSSE(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, "event: connected\ndata: ok\n\n")
 
 	// Send current flow state on connect
-	flowStateMu.RLock()
-	if flowState != nil {
-		data, _ := json.Marshal(flowState)
+	if snapshot := flowManager.Snapshot(); snapshot != nil {
+		data, _ := json.Marshal(snapshot)
 		fmt.Fprintf(w, "event: flowupdate\ndata: %s\n\n", data)
 	}
-	flowStateMu.RUnlock()
 
 	if f, ok := w.(http.Flusher); ok {
 		f.Flush()
@@ -306,31 +298,11 @@ func broadcastSSE(filename string) {
 }
 
 func broadcastFlowUpdate() {
-	flowStateMu.RLock()
-	state := flowState
-	if state == nil {
-		flowStateMu.RUnlock()
+	snapshot := flowManager.Snapshot()
+	if snapshot == nil {
 		return
 	}
-
-	// Deep copy to avoid concurrent map access during JSON marshal
-	stateCopy := &FlowState{
-		FlowID:    state.FlowID,
-		Running:   state.Running,
-		Step:      state.Step,
-		Models:    make([]string, len(state.Models)),
-		Responses: make(map[string]map[int]string),
-	}
-	copy(stateCopy.Models, state.Models)
-	for model, steps := range state.Responses {
-		stateCopy.Responses[model] = make(map[int]string)
-		for step, text := range steps {
-			stateCopy.Responses[model][step] = text
-		}
-	}
-	flowStateMu.RUnlock()
-
-	data, err := json.Marshal(stateCopy)
+	data, err := json.Marshal(snapshot)
 	if err != nil {
 		return
 	}
@@ -529,35 +501,14 @@ func handleFlowClear(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	flowStateMu.Lock()
-	flowState = nil
-	flowStateMu.Unlock()
-
+	flowManager.Clear()
 	log.Printf("Flow state cleared")
 	w.WriteHeader(http.StatusOK)
 }
 
 func handleFlowHasContent(w http.ResponseWriter, r *http.Request) {
-	flowStateMu.RLock()
-	state := flowState
-	flowStateMu.RUnlock()
-
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]bool{"has_content": flowHasContent(state)})
-}
-
-func flowHasContent(state *FlowState) bool {
-	if state == nil || state.Responses == nil {
-		return false
-	}
-	for _, steps := range state.Responses {
-		for _, text := range steps {
-			if len(text) > 0 {
-				return true
-			}
-		}
-	}
-	return false
+	json.NewEncoder(w).Encode(map[string]bool{"has_content": flowManager.HasContent()})
 }
 
 func handleFlowTrigger(w http.ResponseWriter, r *http.Request) {
@@ -597,41 +548,28 @@ func handleFlowState(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	w.Header().Set("Content-Type", "application/json")
+
 	model := r.URL.Query().Get("model")
 	tabStr := r.URL.Query().Get("tab")
 
-	flowStateMu.RLock()
-	state := flowState
-	flowStateMu.RUnlock()
-
-	w.Header().Set("Content-Type", "application/json")
-	if state == nil {
-		json.NewEncoder(w).Encode(map[string]interface{}{"running": false})
-		return
-	}
-
 	// Convert tab index to model name
 	if tabStr != "" && model == "" {
-		tab, err := strconv.Atoi(tabStr)
-		if err == nil && tab >= 0 && tab < len(state.Models) {
-			model = state.Models[tab]
-		}
+		tab, _ := strconv.Atoi(tabStr)
+		model = flowManager.GetModelForTab(tab)
 	}
 
 	if model != "" {
-		// Return only the specified model's responses
-		filtered := map[string]interface{}{
-			"flow_id": state.FlowID,
-			"running": state.Running,
-			"step":    state.Step,
-			"model":   model,
-			"content": state.Responses[model],
-		}
-		json.NewEncoder(w).Encode(filtered)
+		json.NewEncoder(w).Encode(flowManager.SnapshotForModel(model))
 		return
 	}
 
-	json.NewEncoder(w).Encode(state)
+	snapshot := flowManager.Snapshot()
+	if snapshot == nil {
+		json.NewEncoder(w).Encode(map[string]interface{}{"running": false})
+		return
+	}
+	json.NewEncoder(w).Encode(snapshot)
 }
 
 type FlowRequest struct {
@@ -719,18 +657,7 @@ func handleFlow(w http.ResponseWriter, r *http.Request) {
 	modelResults := make(map[string]string)
 
 	// Initialize flow state
-	flowStateMu.Lock()
-	flowState = &FlowState{
-		FlowID:    req.FlowID,
-		Running:   true,
-		Step:      0,
-		Models:    flow.Models,
-		Responses: make(map[string]map[int]string),
-	}
-	for _, model := range flow.Models {
-		flowState.Responses[model] = make(map[int]string)
-	}
-	flowStateMu.Unlock()
+	flowManager.Initialize(req.FlowID, flow.Models)
 	broadcastFlowUpdate()
 
 	// Use request context for cancellation
@@ -740,21 +667,13 @@ func handleFlow(w http.ResponseWriter, r *http.Request) {
 	go func() {
 		defer close(chunks)
 		defer func() {
-			flowStateMu.Lock()
-			if flowState != nil {
-				flowState.Running = false
-			}
-			flowStateMu.Unlock()
+			flowManager.SetRunning(false)
 			broadcastFlowUpdate()
 		}()
 
 		for stepIdx, step := range flow.Steps {
 			// Update current step
-			flowStateMu.Lock()
-			if flowState != nil {
-				flowState.Step = stepIdx
-			}
-			flowStateMu.Unlock()
+			flowManager.SetStep(stepIdx)
 
 			// Check if cancelled
 			select {
@@ -953,11 +872,7 @@ func runModelStep(ctx context.Context, apiKey, model string, stepIdx int, prompt
 					chunks <- StreamChunk{Model: model, Step: stepIdx, Content: content}
 
 					// Update flow state
-					flowStateMu.Lock()
-					if flowState != nil && flowState.Responses[model] != nil {
-						flowState.Responses[model][stepIdx] = fullResponse.String()
-					}
-					flowStateMu.Unlock()
+					flowManager.SetResponse(model, stepIdx, fullResponse.String())
 					broadcastFlowUpdate()
 				}
 			}
